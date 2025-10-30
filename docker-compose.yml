@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  # Frontend
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:4000/api
+      - VITE_WS_URL=http://localhost:4000
+    depends_on:
+      - server
+    networks:
+      - greenpulse-network
+
+  # Backend API
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      - DATABASE_URL=postgresql://greenpulse:greenpulse123@timescaledb:5432/greenpulse
+      - REDIS_URL=redis://redis:6379
+      - ML_SERVICE_URL=http://ml-service:8000
+      - MQTT_BROKER_URL=mqtt://mosquitto:1883
+      - JWT_SECRET=${JWT_SECRET}
+      - NODE_ENV=production
+      - CLIENT_URL=http://localhost:3000
+    depends_on:
+      - timescaledb
+      - redis
+      - ml-service
+      - mosquitto
+    networks:
+      - greenpulse-network
+
+  # ML Service
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://greenpulse:greenpulse123@timescaledb:5432/greenpulse
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ml-models:/app/models
+    networks:
+      - greenpulse-network
+
+  # TimescaleDB (PostgreSQL with time-series extensions)
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=greenpulse
+      - POSTGRES_PASSWORD=greenpulse123
+      - POSTGRES_DB=greenpulse
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    networks:
+      - greenpulse-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U greenpulse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - greenpulse-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MQTT Broker (Mosquitto)
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./docker/mosquitto/config:/mosquitto/config
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_logs:/mosquitto/log
+    networks:
+      - greenpulse-network
+
+  # InfluxDB (optional for high-frequency metrics)
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=greenpulse
+      - DOCKER_INFLUXDB_INIT_PASSWORD=greenpulse123
+      - DOCKER_INFLUXDB_INIT_ORG=greenpulse
+      - DOCKER_INFLUXDB_INIT_BUCKET=energy_data
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    networks:
+      - greenpulse-network
+
+volumes:
+  timescaledb_data:
+  redis_data:
+  ml-models:
+  mosquitto_data:
+  mosquitto_logs:
+  influxdb_data:
+
+networks:
+  greenpulse-network:
+    driver: bridge
